@@ -1,6 +1,6 @@
 # Generating Freeform Endoskeletal Robots
 
-**Paper URL**: [Generating Freeform Endoskeletal Robots](https://openreview.net/pdf?id=awvJBtB2op)
+**[Paper]**:(https://openreview.net/pdf?id=awvJBtB2op) 
 
 **Status**: Under review at ICLR
 
