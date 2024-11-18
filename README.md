@@ -1,5 +1,5 @@
 # Generating Freeform Endoskeletal Robots
-[[Paper]](https://openreview.net/pdf?id=awvJBtB2op)    [[Website]](https://endoskeletal.github.io/)
+[[Paper]](https://openreview.net/forum?id=awvJBtB2op)    [[Website]](https://endoskeletal.github.io/)
 
 **Status**: Under review at ICLR
 
