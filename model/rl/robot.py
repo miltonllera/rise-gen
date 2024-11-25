@@ -1,7 +1,7 @@
 import torch as t
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.distributions import Categorical
+from torch.distributions import Categorical, Normal
 from torch_geometric.nn.conv import TransformerConv
 from torch_geometric.nn.pool import global_max_pool
 from rl.net import NeuralNetworkModule
@@ -352,6 +352,313 @@ class RobotCritic(NeuralNetworkModule):
                 edges,
                 edge_features,
             )
+
+        value = self.value_resnet(out_pooled_features)
+        return value.view(-1)
+
+
+class RobotContinuousActor(NeuralNetworkModule):
+    def __init__(self, encoder: RobotEncoder, freeze_encoder: bool = False):
+        super().__init__()
+        self.encoder = encoder if not freeze_encoder else [encoder]
+        self.action_resnet = nn.Sequential(
+            ResnetBlockFC(1024, 256),
+            ResnetBlockFC(256, 64),
+            ResnetBlockFC(64, 2),
+        )
+        self.freeze_encoder = freeze_encoder
+        self.set_input_module(self.action_resnet)
+        self.set_output_module(self.action_resnet)
+
+    def forward(
+        self,
+        com,
+        voxel_positions,
+        voxel_features,
+        node_positions,
+        node_features,
+        edges,
+        edge_features,
+        action=None,
+    ):
+        batch_size = len(com)
+        if self.freeze_encoder:
+            with t.no_grad():
+                (
+                    out_node_features,
+                    out_pooled_features,
+                    out_node_batch,
+                    out_edge_batch,
+                    out_edges,
+                    out_unique_edge_batch,
+                    out_unique_edges,
+                ) = self.encoder[0](
+                    com,
+                    voxel_positions,
+                    voxel_features,
+                    node_positions,
+                    node_features,
+                    edges,
+                    edge_features,
+                )
+        else:
+            (
+                out_node_features,
+                out_pooled_features,
+                out_node_batch,
+                out_edge_batch,
+                out_edges,
+                out_unique_edge_batch,
+                out_unique_edges,
+            ) = self.encoder(
+                com,
+                voxel_positions,
+                voxel_features,
+                node_positions,
+                node_features,
+                edges,
+                edge_features,
+            )
+
+        # Shape [E_0 + E_1 + ... + E_(B-1), 256]
+        edge_total = out_unique_edges.shape[1]
+        first_node_features = t.gather(
+            out_node_features,
+            dim=0,
+            index=out_unique_edges[0].unsqueeze(1).expand(edge_total, 256),
+        )
+        second_node_features = t.gather(
+            out_node_features,
+            dim=0,
+            index=out_unique_edges[1].unsqueeze(1).expand(edge_total, 256),
+        )
+        node_pooled_features = t.gather(
+            out_pooled_features,
+            dim=0,
+            index=out_unique_edge_batch.unsqueeze(1).expand(
+                out_unique_edge_batch.shape[0], 512
+            ),
+        )
+
+        edge_features = t.cat(
+            (first_node_features, second_node_features, node_pooled_features), dim=1
+        )
+
+        mu, logvar = t.split(self.action_resnet(edge_features), 1, dim=1)
+        mu = mu.squeeze(1)
+        logvar = logvar.squeeze(1)
+        dist = Normal(mu, t.exp(0.5 * logvar))
+        raw_action = dist.sample() if action is None else t.concatenate(action)
+        raw_log_prob = dist.log_prob(raw_action)
+        raw_entropy = dist.entropy()
+
+        # Now convert from concatenated batch to list batch
+        action = []
+        log_prob = []
+        entropy = []
+        for idx in range(batch_size):
+            action.append(raw_action[out_unique_edge_batch == idx])
+            log_prob.append(t.sum(raw_log_prob[out_unique_edge_batch == idx]))
+            entropy.append(t.sum(raw_entropy[out_unique_edge_batch == idx]))
+        log_prob = t.stack(log_prob)
+        entropy = t.stack(entropy)
+        return action, log_prob, entropy
+
+
+RobotContinuousCritic = RobotCritic
+
+
+class RobotSimpleEncoder(nn.Module):
+    def __init__(self):
+        super(RobotSimpleEncoder, self).__init__()
+        self.kinematic_encoder_conv1 = TransformerConv(
+            in_channels=14, out_channels=128, edge_dim=9
+        )
+        self.kinematic_encoder_conv2 = TransformerConv(
+            in_channels=128, out_channels=128, edge_dim=9
+        )
+        self.kinematic_encoder_conv3 = TransformerConv(
+            in_channels=128, out_channels=256, edge_dim=9
+        )
+
+    def forward(
+        self,
+        com,
+        node_features,
+        edges,
+        edge_features,
+    ):
+        """
+        Note:
+            Node num N* corresponds to rigid body num, variable across batch
+            Edge num E* corresponds to joint num, variable across batch
+            There are E* * 2 edges for edges in both directions
+        Args:
+            com: List of length B, inner shape [1, 3]
+            node_features: List of length B, inner shape [N*, 14]
+            edges: List of length B, inner shape [2, E* * 2]
+            edge_features: List of length B, inner shape [E* * 2, 9]
+        Returns:
+            out_node_features: Shape [N_0 + N_1 + ... + N_(B-1), 16]
+            out_pooled_features: Shape [B, 16]
+            out_node_batch: Index tensor, Shape [N_0 + N_1 + ... + N_(B-1)]
+            out_edge_batch: Index tensor, Shape [(E_0 + E_1 + ... + E_(B-1)) * 2]
+            out_edges: Shape [2, (E_0 + E_1 + ... + E_(B-1)) * 2]
+            out_unique_edge_batch: Index tensor, Shape [E_0 + E_1 + ... + E_(B-1)]
+            out_unique_edges: Shape [2, E_0 + E_1 + ... + E_(B-1)]
+        """
+        com = t.concatenate(com, dim=0)
+        device = com.device
+
+        node_batch = []
+        node_num = []
+        max_node_num = 0
+        for i in range(len(node_features)):
+            node_batch += [i] * len(node_features[i])
+            node_num.append(len(node_features[i]))
+            max_node_num = max(max_node_num, len(node_features[i]))
+        node_batch = t.tensor(node_batch, dtype=t.long, device=device)
+
+        # Add offsets to edge indices
+        edge_indices = []
+        unique_edge_indices = []
+        edge_batch = []
+        unique_edge_batch = []
+        offset = 0
+        for i, (e, n_num) in enumerate(zip(edges, node_num)):
+            edge_batch += [i] * e.shape[1]
+            edge_indices.append(e + offset)
+            unique_edge_batch += [i] * (e.shape[1] // 2)
+            unique_edge_indices.append((e + offset)[:, : e.shape[1] // 2])
+            offset += n_num
+        edge_batch = t.tensor(edge_batch, dtype=t.long, device=device)
+        edge_indices = t.concatenate(edge_indices, dim=1)
+        unique_edge_batch = t.tensor(unique_edge_batch, dtype=t.long, device=device)
+        unique_edge_indices = t.concatenate(unique_edge_indices, dim=1)
+        edge_features = t.concatenate(edge_features, dim=0)
+
+        # Shape [N_0 + N_1 + ... N_(B-1), 14]
+        node_features = t.concatenate(node_features, dim=0).to(device)
+        out1 = self.kinematic_encoder_conv1(node_features, edge_indices, edge_features)
+        out2 = F.leaky_relu(
+            self.kinematic_encoder_conv2(
+                F.leaky_relu(out1, negative_slope=0.2), edge_indices, edge_features
+            ),
+            negative_slope=0.2,
+        )
+        out2 = self.kinematic_encoder_conv3(out2, edge_indices, edge_features)
+        pooled_out = global_max_pool(out2, node_batch, size=com.shape[0])
+        return (
+            out1,
+            pooled_out,
+            node_batch,
+            edge_batch,
+            edge_indices,
+            unique_edge_batch,
+            unique_edge_indices,
+        )
+
+
+class RobotSimpleActor(NeuralNetworkModule):
+    def __init__(self, resolution: int = 5):
+        super().__init__()
+        self.resolution = resolution
+        self.encoder = RobotSimpleEncoder()
+        self.action_resnet = nn.Sequential(
+            ResnetBlockFC(512, 128), ResnetBlockFC(128, resolution)
+        )
+        self.set_input_module(self.encoder)
+        self.set_output_module(self.action_resnet)
+
+    def forward(
+        self,
+        com,
+        node_features,
+        edges,
+        edge_features,
+        action=None,
+    ):
+        batch_size = len(com)
+        (
+            out_node_features,
+            out_pooled_features,
+            out_node_batch,
+            out_edge_batch,
+            out_edges,
+            out_unique_edge_batch,
+            out_unique_edges,
+        ) = self.encoder(
+            com,
+            node_features,
+            edges,
+            edge_features,
+        )
+
+        # Shape [E_0 + E_1 + ... + E_(B-1), 128]
+        edge_total = out_unique_edges.shape[1]
+        first_node_features = t.gather(
+            out_node_features,
+            dim=0,
+            index=out_unique_edges[0].unsqueeze(1).expand(edge_total, 128),
+        )
+        second_node_features = t.gather(
+            out_node_features,
+            dim=0,
+            index=out_unique_edges[1].unsqueeze(1).expand(edge_total, 128),
+        )
+        node_pooled_features = t.gather(
+            out_pooled_features,
+            dim=0,
+            index=out_unique_edge_batch.unsqueeze(1).expand(
+                out_unique_edge_batch.shape[0], 256
+            ),
+        )
+
+        edge_features = t.cat(
+            (first_node_features, second_node_features, node_pooled_features), dim=1
+        )
+        action_logits = self.action_resnet(edge_features)
+        dist = Categorical(logits=action_logits)
+        raw_action = dist.sample() if action is None else t.concatenate(action)
+        raw_log_prob = dist.log_prob(raw_action)
+        raw_entropy = dist.entropy()
+
+        # Now convert from concatenated batch to list batch
+        action = []
+        log_prob = []
+        entropy = []
+        for idx in range(batch_size):
+            action.append(raw_action[out_unique_edge_batch == idx])
+            log_prob.append(t.sum(raw_log_prob[out_unique_edge_batch == idx]))
+            entropy.append(t.sum(raw_entropy[out_unique_edge_batch == idx]))
+        log_prob = t.stack(log_prob)
+        entropy = t.stack(entropy)
+        return action, log_prob, entropy
+
+
+class RobotSimpleCritic(NeuralNetworkModule):
+    def __init__(self):
+        super().__init__()
+        self.encoder = RobotSimpleEncoder()
+        self.value_resnet = nn.Sequential(
+            ResnetBlockFC(256, 128), ResnetBlockFC(128, 1)
+        )
+        self.set_input_module(self.encoder)
+        self.set_output_module(self.value_resnet)
+
+    def forward(
+        self,
+        com,
+        node_features,
+        edges,
+        edge_features,
+    ):
+        _, out_pooled_features, *__ = self.encoder(
+            com,
+            node_features,
+            edges,
+            edge_features,
+        )
 
         value = self.value_resnet(out_pooled_features)
         return value.view(-1)

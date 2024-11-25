@@ -336,15 +336,14 @@ class Encoder(nn.Module):
 class Decoder(nn.Module):
     """
     A single module for decoder path consisting of the upsampling layer
-    (either learned ConvTranspose3d or nearest neighbor interpolation)
-    followed by a basic module (DoubleConv or ExtResNetBlock).
+    (either learned ConvTranspose3d or nearest neighbor interpolation) followed by a basic module (DoubleConv or ExtResNetBlock).
     Args:
         in_channels (int): number of input channels
         out_channels (int): number of output channels
         kernel_size (int): size of the convolving kernel
         scale_factor (tuple): used as the multiplier for the image H/W/D in
-            case of nn.Upsample or as stride in case of ConvTranspose3d,
-            must reverse the MaxPool3d operation from the corresponding encoder
+            case of nn.Upsample or as stride in case of ConvTranspose3d, must reverse the MaxPool3d operation
+            from the corresponding encoder
         basic_module(nn.Module): either ResNetBlock or DoubleConv
         conv_layer_order (string): determines the order of layers
             in `DoubleConv` module. See `DoubleConv` for more info.
@@ -419,6 +418,8 @@ class Upsampling(nn.Module):
 
     Args:
         transposed_conv (bool): if True uses ConvTranspose3d for upsampling, otherwise uses interpolation
+        concat_joining (bool): if True uses concatenation joining between encoder and decoder features, otherwise
+            uses summation joining (see Residual U-Net)
         in_channels (int): number of input channels for transposed conv
         out_channels (int): number of output channels for transpose conv
         kernel_size (int or tuple): size of the convolving kernel
@@ -702,9 +703,8 @@ class Abstract3DUNetEncoder(nn.Module):
                     num_groups=num_groups,
                 )
             else:
-                # TODO: adapt for anisotropy in the data, i.e. use proper pooling kernel
-                #  to make the data isotropic after 1-2 pooling operations currently
-                #  pools with a constant kernel: (2, 2, 2)
+                # TODO: adapt for anisotropy in the data, i.e. use proper pooling kernel to make the data isotropic after 1-2 pooling operations
+                # currently pools with a constant kernel: (2, 2, 2)
                 encoder = Encoder(
                     f_maps[i - 1],
                     out_feature_num,
@@ -716,8 +716,7 @@ class Abstract3DUNetEncoder(nn.Module):
 
         self.encoders = nn.ModuleList(encoders)
 
-        # create decoder path consisting of the Decoder modules.
-        # The length of the decoder is equal to `len(f_maps) - 1`
+        # create decoder path consisting of the Decoder modules. The length of the decoder is equal to `len(f_maps) - 1`
         decoders = []
         reversed_f_maps = list(reversed(f_maps))
         for i in range(len(reversed_f_maps) - 1):
@@ -727,9 +726,8 @@ class Abstract3DUNetEncoder(nn.Module):
                 in_feature_num = reversed_f_maps[i]
 
             out_feature_num = reversed_f_maps[i + 1]
-            # TODO: if non-standard pooling was used, make sure to use correct
-            #  striding for transpose conv, currently strides with a constant
-            #  stride: (2, 2, 2)
+            # TODO: if non-standard pooling was used, make sure to use correct striding for transpose conv
+            # currently strides with a constant stride: (2, 2, 2)
             decoder = Decoder(
                 in_feature_num,
                 out_feature_num,
@@ -775,9 +773,8 @@ class Abstract3DUNetEncoder(nn.Module):
 
         x = self.final_conv(x)
 
-        # apply final_activation (i.e. Sigmoid or Softmax) only during prediction.
-        # During training the network outputs logits, and it's up to the user to
-        # normalize it before visualising with tensorboard or computing validation metric
+        # apply final_activation (i.e. Sigmoid or Softmax) only during prediction. During training the network outputs
+        # logits and it's up to the user to normalize it before visualising with tensorboard or computing validation metric
         if self.testing and self.final_activation is not None:
             x = self.final_activation(x)
 

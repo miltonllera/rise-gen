@@ -82,6 +82,12 @@ class SimBuilder:
                 float, range (0~1)
             joint_num:
                 number of joints, int, range (0~N)
+            is_rigid_volume:
+                total rigid volume, int
+            total_volume:
+                total volume, int
+            cc3d:
+                A dictionary, cc3d statistics of segment ids
             size: x_size, y_size, z_size, tuple (int, int, int)
         """
         return self.stats
@@ -176,7 +182,13 @@ class SimBuilder:
         tree = etree.fromstring(robot_rsc, parser=parser)
         return etree.tostring(tree, pretty_print=True, encoding=str)
 
-    def visualize(self, is_not_empty_ax=None, is_rigid_ax=None, segmentation_ax=None):
+    def visualize(
+        self,
+        is_not_empty_ax=None,
+        is_rigid_ax=None,
+        segmentation_ax=None,
+        plot_joints=True,
+    ):
         if is_not_empty_ax is None and is_rigid_ax is None and segmentation_ax is None:
             fig = plt.figure(figsize=(12, 4))
             axs = fig.subplots(1, 3, subplot_kw={"projection": "3d"})
@@ -238,7 +250,8 @@ class SimBuilder:
                         (0.5, 0.5, 0.5, 0.5),  # grey
                     ],
                 )
-                plot_hinge_joints(segmentation_ax, self.log["connections"])
+                if plot_joints:
+                    plot_hinge_joints(segmentation_ax, self.log["connections"])
 
     def parse(
         self,
@@ -337,6 +350,15 @@ class SimBuilder:
         self.log["segment_id_num_separate_rigid_segments_and_get_joints"] = (
             segment_id_num
         )
+        self.stats["cc3d"] = cc3d.statistics(segment_ids)
+        # Add 1 since cc3d won't compute surface area between background 0 and non_empty 1
+        self.stats["surface_area"] = cc3d.contacts(
+            non_empty + 1,
+            connectivity=6,
+            surface_area=True,
+        )[(1, 2)]
+        self.stats["is_rigid_volume"] = np.sum(rigidity)
+        self.stats["total_volume"] = np.sum(non_empty)
         self.log["connections"] = connections
         self.log["pruned_connections"] = pruned_connections
         rigidity = segment_ids > 0
@@ -749,13 +771,23 @@ class SimBuilder:
         """
         LAYER_TEMPLATE = "<Layer>{}</Layer>"
 
+        non_empty_x = np.sum(is_not_empty.astype(int), axis=(1, 2)) > 0
+        start_x = np.argmax(non_empty_x)
+        end_x = len(non_empty_x) - np.argmax(np.flip(non_empty_x))
+        non_empty_y = np.sum(is_not_empty.astype(int), axis=(0, 2)) > 0
+        start_y = np.argmax(non_empty_y)
+        end_y = len(non_empty_y) - np.argmax(np.flip(non_empty_y))
+
         non_empty_z = np.sum(is_not_empty.astype(int), axis=(0, 1)) > 0
         start_layer = np.argmax(non_empty_z)
         end_layer = len(non_empty_z) - np.argmax(np.flip(non_empty_z))
-        x_size = is_not_empty.shape[0]
-        y_size = is_not_empty.shape[1]
+        x_size = end_x - start_x
+        y_size = end_y - start_y
         z_size = end_layer - start_layer
-        layer_size = x_size * y_size
+
+        x_layer_size = is_not_empty.shape[0]
+        y_layer_size = is_not_empty.shape[1]
+        layer_size = x_layer_size * y_layer_size
 
         self.stats["size"] = (x_size, y_size, z_size)
 
@@ -790,7 +822,7 @@ class SimBuilder:
                     ",".join(map(str, s_type[offset : offset + layer_size]))
                 )
             )
-        shape = SHAPE_TEMPLATE.format(x_size, y_size, z_size)
+        shape = SHAPE_TEMPLATE.format(x_layer_size, y_layer_size, z_size)
 
         return (
             BODY_CONFIG.format(

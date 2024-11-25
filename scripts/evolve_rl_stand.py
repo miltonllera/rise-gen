@@ -8,7 +8,6 @@ import neptune
 import torch as t
 import torch.optim as optim
 import numpy as np
-import matplotlib.pyplot as plt
 from io import BytesIO
 from PIL import Image
 from glob import glob
@@ -22,49 +21,8 @@ from rl.algorithms import PPO
 from model.vae.star_vae import StarVAE
 from model.rl.robot import RobotEncoder, RobotActor, RobotCritic
 from sim.env import RiseStochasticEnv
-from sim.builder import SimBuilder
 from utils.train_utils import RLTrainDirs, ExceptionCatcher, count_parameters
-
-
-@ray.remote
-def build_robot(
-    epoch: int,
-    robot_id: int,
-    logits: np.ndarray,
-    rl_dirs: RLTrainDirs,
-    max_torque: float,
-):
-    with ExceptionCatcher() as _:
-        builder = SimBuilder(
-            voxel_size=voxel_size,
-            valid_min_rigid_ratio=0.2,
-            valid_min_joint_num=2,
-            valid_max_connected_components=1,
-            min_rigid_volume=100,
-            hinge_torque=max_torque,
-        )
-        rsc = builder.build(
-            logits,
-            f"bot_e_{epoch}_ro_{robot_id}",
-            rl_dirs.results_path,
-            rl_dirs.records_path,
-            save_history=True,
-            save_h5_history=True,
-            print_summary=True,
-        )
-
-        fig = plt.figure(figsize=(18, 6))
-        axs = fig.subplots(1, 3, subplot_kw={"projection": "3d"})
-        builder.visualize(
-            is_not_empty_ax=axs[0],
-            is_rigid_ax=axs[1],
-            segmentation_ax=axs[2],
-        )
-        buf = BytesIO()
-        fig.savefig(buf)
-        plt.close()
-        buf.seek(0)
-        return rsc, buf
+from scripts.common import build_robot
 
 
 @ray.remote(num_gpus=0.9)
@@ -76,6 +34,7 @@ class RobotSimulationCollector:
         actor: RobotActor,
         critic: RobotCritic,
         min_actions: int,
+        voxel_size: float,
     ):
         with ExceptionCatcher() as _:
             self.rank = rank
@@ -83,7 +42,7 @@ class RobotSimulationCollector:
             self.actor = actor.to("cuda:0")
             self.critic = critic.to("cuda:0")
             self.min_actions = min_actions
-
+            self.voxel_size = voxel_size
             self.ppo = PPO(actor, critic, optim.AdamW, nn.MSELoss())
 
     def update_parameters(self, actor_state_dict, critic_state_dict):
@@ -147,7 +106,7 @@ class RobotSimulationCollector:
                             reward_dir = np.array([1.0, 0.0, 0.0])
                         voxel_num = len(r["voxel_positions"])
                         contact_ratio = (
-                            np.sum(r["voxel_positions"][:, 2] < voxel_size * 5)
+                            np.sum(r["voxel_positions"][:, 2] < self.voxel_size * 5)
                             / voxel_num
                         )
 
@@ -155,7 +114,7 @@ class RobotSimulationCollector:
                         if i < len(obs) - 1:
                             next_com = rst[i + 1]["com"]
                             next_movement = next_com - com
-                            reward = np.dot(next_movement, reward_dir) / voxel_size
+                            reward = np.dot(next_movement, reward_dir) / self.voxel_size
                             reward = max(reward, -0.1)
                             reward -= contact_ratio
                             if np.linalg.norm(next_movement) < 1e-3:
@@ -246,6 +205,7 @@ class RobotEvolution:
         ppo_train_steps: int,
         ppo_accumulate_steps: int,
         ppo_save_interval: int,
+        plot_robots: bool,
     ):
         with ExceptionCatcher() as _:
             for key, value in env_vars.items():
@@ -268,6 +228,7 @@ class RobotEvolution:
             self.ppo_train_steps = ppo_train_steps
             self.ppo_accumulate_steps = ppo_accumulate_steps
             self.ppo_save_interval = ppo_save_interval
+            self.plot_robots = plot_robots
 
             ################################
             # Logging utilities
@@ -356,7 +317,7 @@ class RobotEvolution:
             ################################
             self.collectors = [
                 RobotSimulationCollector.remote(
-                    c_idx, rl_dirs, actor_ref, critic_ref, min_actions
+                    c_idx, rl_dirs, actor_ref, critic_ref, min_actions, voxel_size
                 )
                 for c_idx in range(collector_num)
             ]
@@ -506,6 +467,8 @@ class RobotEvolution:
                         logits[robot_id].numpy(),
                         self.rl_dirs,
                         self.max_torque,
+                        self.plot_robots,
+                        self.voxel_size,
                     )
                 )
             print(f"Submission takes {time.time() - begin} s")
@@ -852,6 +815,7 @@ if __name__ == "__main__":
     ppo_train_steps = 60
     ppo_accumulate_steps = 4
     ppo_save_interval = 10
+    plot_robots = True
 
     ray.init(num_cpus=50)
     print("Ray initialized")
@@ -896,6 +860,7 @@ if __name__ == "__main__":
         ppo_train_steps=ppo_train_steps,
         ppo_accumulate_steps=ppo_accumulate_steps,
         ppo_save_interval=ppo_save_interval,
+        plot_robots=plot_robots,
     )
     ray.get(evo.evolve.remote())
     time.sleep(5)

@@ -2,13 +2,16 @@ import numpy as np
 from noise import pnoise2
 
 
-def generate_climbing_terrain(
+def generate_mountain_terrain(
     x_values: int,
     y_values: int,
     slope: float = 0.1,
     center_radius: float = 3,
     max_height: float = 2,
 ) -> np.ndarray:
+    """
+    Generate a funnel like mountain terrain.
+    """
     ground = np.zeros((y_values, x_values))
     center_x = x_values // 2
     center_y = y_values // 2
@@ -20,7 +23,7 @@ def generate_climbing_terrain(
     return ground
 
 
-def generate_noisy_hill_terrain(
+def generate_noisy_mountain_terrain(
     x_values: int,
     y_values: int,
     slope: float = 0.08,
@@ -28,6 +31,9 @@ def generate_noisy_hill_terrain(
     noise_amplitude: float = 0.02,
     max_height: float = 1.5,
 ) -> np.ndarray:
+    """
+    Generate a noisy, funnel like mountain terrain.
+    """
     ground = np.zeros((y_values, x_values))
     center_x = x_values // 2
     center_y = y_values // 2
@@ -36,8 +42,12 @@ def generate_noisy_hill_terrain(
             dist = np.sqrt((x - center_x) ** 2 + (y - center_y) ** 2)
             if dist > center_radius:
                 noise = np.random.uniform(-1, 1)
-                ground[y, x] = min(slope * (dist - center_radius), max_height) + noise * noise_amplitude
+                ground[y, x] = (
+                    min(slope * (dist - center_radius), max_height)
+                    + noise * noise_amplitude
+                )
     return ground
+
 
 def generate_perlin_noise_ground(
     x_values: int,
@@ -87,7 +97,7 @@ def generate_wave_ground(
     y_values: int,
     trapezoid_base_length: int = 10,
     trapezoid_top_length: int = 5,
-    trapezoid_height: int = 0.3,
+    trapezoid_height: float = 0.3,
     x_direction: bool = True,
 ) -> np.ndarray:
     """
@@ -100,8 +110,8 @@ def generate_wave_ground(
             Controls the distance between the two inclined sides of the trapezoid. Defaults to 10.
         trapezoid_top_length (int, optional): The top length of the trapezoids.
             Controls the flat portion on top of the trapezoid. Defaults to 5.
-        trapezoid_height (int, optional): The height of the trapezoids.
-            Controls how tall the trapezoids are from base to top. Defaults to 5.
+        trapezoid_height (float, optional): The height of the trapezoids.
+            Controls how tall the trapezoids are from base to top. Defaults to 0.3.
         x_direction (bool, optional): If True, the wave is oriented in the x direction.
             If False, the wave is oriented in the y direction. Defaults to True.
 
@@ -255,7 +265,9 @@ def scale_terrain_height(
     ) + min_height
 
 
-def clear_terrain_center(terrain: np.ndarray, clear_radius: float, smooth_radius: float) -> np.ndarray:
+def clear_terrain_center(
+    terrain: np.ndarray, clear_radius: float, smooth_radius: float
+) -> np.ndarray:
     y_size, x_size = terrain.shape
     x0 = x_size // 2
     y0 = y_size // 2
@@ -272,16 +284,22 @@ def clear_terrain_center(terrain: np.ndarray, clear_radius: float, smooth_radius
     terrain[clear_mask] = 0
 
     # Pad the terrain to handle edges
-    padded_terrain = np.pad(terrain, pad_width=1, mode='edge')
+    padded_terrain = np.pad(terrain, pad_width=1, mode="edge")
 
     # Initialize smoothed terrain
     smoothed_terrain = np.zeros_like(terrain)
 
     # Sum over the 3x3 neighborhood
     smoothed_terrain = (
-        padded_terrain[0:-2, 0:-2] + padded_terrain[0:-2, 1:-1] + padded_terrain[0:-2, 2:] +
-        padded_terrain[1:-1, 0:-2] + padded_terrain[1:-1, 1:-1] + padded_terrain[1:-1, 2:] +
-        padded_terrain[2:  , 0:-2] + padded_terrain[2:  , 1:-1] + padded_terrain[2:  , 2: ]
+        padded_terrain[0:-2, 0:-2]
+        + padded_terrain[0:-2, 1:-1]
+        + padded_terrain[0:-2, 2:]
+        + padded_terrain[1:-1, 0:-2]
+        + padded_terrain[1:-1, 1:-1]
+        + padded_terrain[1:-1, 2:]
+        + padded_terrain[2:, 0:-2]
+        + padded_terrain[2:, 1:-1]
+        + padded_terrain[2:, 2:]
     ) / 9.0
 
     # Replace values in the smooth_mask with the smoothed values
@@ -362,8 +380,8 @@ def generate_env_with_terrain(x_size: float, y_size: float, terrain: np.ndarray)
                         <ElasticMod>3e4</ElasticMod>
                         <Density>800</Density>
                         <PoissonsRatio>0.35</PoissonsRatio>
-                        <FrictionStatic>10</FrictionStatic>
-                        <FrictionDynamic>10</FrictionDynamic>
+                        <FrictionStatic>1</FrictionStatic>
+                        <FrictionDynamic>0.8</FrictionDynamic>
                         <MaxExpansion>0.5</MaxExpansion>
                         <MinExpansion>-0.5</MinExpansion>
                     </Mechanical>
@@ -380,8 +398,8 @@ def generate_env_with_terrain(x_size: float, y_size: float, terrain: np.ndarray)
                         <ElasticMod>3e4</ElasticMod>
                         <Density>1500</Density>
                         <PoissonsRatio>0.35</PoissonsRatio>
-                        <FrictionStatic>10</FrictionStatic>
-                        <FrictionDynamic>10</FrictionDynamic>
+                        <FrictionStatic>1</FrictionStatic>
+                        <FrictionDynamic>0.8</FrictionDynamic>
                         <MaxExpansion>0.5</MaxExpansion>
                         <MinExpansion>-0.5</MinExpansion>
                     </Mechanical>

@@ -31,7 +31,7 @@ pyvista==0.41.0
 panel
 jupyter
 jupyter_bokeh
-bpy>=4.0.0
+seaborn
 -f https://data.pyg.org/whl/torch-2.3.0+cu121.html
 pyg_lib
 torch_scatter

@@ -329,12 +329,17 @@ class RiseStochasticEnv:
                 all_action = []
                 with Timer("Eval"):
                     with t.no_grad():
-                        for id_, observation in zip(ids, raw_all_observations):
+                        for idx, (id_, observation) in enumerate(
+                            zip(ids, raw_all_observations)
+                        ):
                             output = framework[id_].act(
                                 list_of_dict_to_dict_of_list([observation]),
                                 call_dp_or_ddp_internal_module=True,
                             )
-                            all_action.append(angles[output[0].cpu().numpy()])
+                            all_action.append(angles[output[0][0].cpu().numpy()])
+                            actions[id_].append([output[0][0], output[1][0]])
+                            rotation_signals[idx][:] = all_action[-1]
+
             else:
                 all_observations = list_of_dict_to_dict_of_list(raw_all_observations)
                 with Timer("Eval"):
@@ -345,9 +350,9 @@ class RiseStochasticEnv:
                         )
                 all_action = [angles[a.cpu().numpy()] for a in all_output[0]]
 
-            for idx, id_ in enumerate(ids):
-                actions[id_].append([all_output[0][idx], all_output[1][idx]])
-                rotation_signals[idx][:] = all_action[idx]
+                for idx, id_ in enumerate(ids):
+                    actions[id_].append([all_output[0][idx], all_output[1][idx]])
+                    rotation_signals[idx][:] = all_action[idx]
 
             if debug_log is not None:
                 for idx, id_ in enumerate(ids):
@@ -438,7 +443,7 @@ class RiseStochasticEnv:
             record_buffer_size=record_buffer_size,
             save_result=True,
             save_record=save_record,
-            log_level="debug",
+            log_level="info",
         )
         if return_observations:
             return result, observations
@@ -478,6 +483,319 @@ class RiseStochasticEnv:
             self.actions,
             self.reward_states,
             self.angles,
+            self.voxel_sample_num,
+            self.random_seed + generation,
+            self.debug_log,
+            callback_timer,
+        )
+        for env_config, robot_config in zip(self.env_configs, self.robot_configs):
+            configs.append([env_config, robot_config])
+
+        if self.debug_log is not None:
+            self.debug_log["configs"] = configs
+
+        result = self.rise.run_sims(
+            configs,
+            list(range(len(configs))),
+            callback,
+            record_buffer_size=1 if not save_record else record_buffer_size,
+            save_result=True,
+            save_record=save_record,
+            log_level="info",
+        )
+        print(f"Callback time: {callback_timer.elapsed}")
+        return result, self.observations, self.actions, self.reward_states
+
+
+class RiseContinuousStochasticEnv:
+    def __init__(
+        self,
+        framework: Union[A2C, PPO, List[A2C], List[PPO]],
+        devices: List[int],
+        env_configs: List[str],
+        robot_configs: List[str],
+        angle_max: float,
+        voxel_sample_num: int = 5000,
+        random_seed: int = 42,
+        debug_log_name: str = None,
+    ):
+        if isinstance(framework, list):
+            assert len(framework) == len(env_configs)
+        self.framework = framework
+        self.rise = Rise(devices=devices)
+        self.env_configs = env_configs
+        self.robot_configs = robot_configs
+        self.angle_max = angle_max
+        self.observations = [
+            [] for _ in range(len(robot_configs))
+        ]  # type: List[List[dict]]
+        self.actions = [
+            [] for _ in range(len(robot_configs))
+        ]  # type: List[List[List[t.Tensor]]]
+        self.reward_states = [
+            [] for _ in range(len(robot_configs))
+        ]  # type: List[List[dict]]
+        self.voxel_sample_num = voxel_sample_num
+        self.random_seed = random_seed
+        self.debug_log = (
+            {
+                "input": {
+                    id_: {
+                        "rotation_signals": [],
+                        "time_points": [],
+                    }
+                    for id_ in range(len(robot_configs))
+                },
+                "configs": [],
+                "file_name": debug_log_name,
+            }
+            if debug_log_name is not None
+            else None
+        )
+
+    @staticmethod
+    def process_observation(args):
+        (
+            id_,
+            frame,
+            rotation_signals,
+            voxel_sample_num,
+            random_seed,
+        ) = args
+
+        (
+            positions,
+            center_of_mass,
+            velocities,
+            pressures,
+        ) = build_voxel_observations(frame, random_seed, voxel_sample_num)
+
+        (
+            node_positions,
+            node_features,
+            edges,
+            edge_features,
+        ) = build_kinematic_graph(frame)
+
+        reward_voxel_positions, reward_com = build_reward_state(frame)
+
+        return (
+            id_,
+            {
+                "voxel_positions": positions,
+                "voxel_features": t.cat((velocities, pressures), dim=1),
+                "node_positions": node_positions,
+                "node_features": node_features,
+                "edges": edges,
+                "edge_features": edge_features,
+                "com": center_of_mass.unsqueeze(0),
+            },
+            {"voxel_positions": reward_voxel_positions, "com": reward_com},
+        )
+
+    @staticmethod
+    def get_callback(
+        framework: Union[A2C, PPO],
+        observations: List[List[dict]],
+        actions: List[List[List[t.Tensor]]],
+        reward_states: List[List[dict]],
+        angle_max: float,
+        voxel_sample_num: int = 5000,
+        random_seed: int = 42,
+        debug_log: dict = None,
+        callback_timer: AccumulateTimer = None,
+    ):
+
+        def callback(
+            ids: List[int],
+            time_points: List[float],
+            frames: List[RiseFrame],
+            expansion_signals: List[Any],
+            rotation_signals: List[Any],
+        ):
+            if callback_timer is not None:
+                callback_timer.resume()
+            with Timer("Preprocess"):
+                pool = ThreadPool(4)
+                results = list(
+                    pool.map(
+                        RiseStochasticEnv.process_observation,
+                        zip(
+                            ids,
+                            frames,
+                            [np.array(sig) for sig in rotation_signals],
+                            [voxel_sample_num] * len(ids),
+                            [random_seed + id_ for id_ in ids],
+                        ),
+                    )
+                )
+                for id_, observation, reward_state in results:
+                    observations[id_].append(observation)
+                    reward_states[id_].append(reward_state)
+                mapped_results = {x[0]: x[1] for x in results}
+                raw_all_observations = [mapped_results[id_] for id_ in ids]
+
+            if isinstance(framework, list):
+                all_action = []
+                with Timer("Eval"):
+                    with t.no_grad():
+                        for idx, (id_, observation) in enumerate(
+                            zip(ids, raw_all_observations)
+                        ):
+                            output = framework[id_].act(
+                                list_of_dict_to_dict_of_list([observation]),
+                                call_dp_or_ddp_internal_module=True,
+                            )
+                            all_action.append(
+                                output[0][0].cpu().numpy().astype(np.float32)
+                            )
+                            actions[id_].append([output[0][0], output[1][0]])
+                            rotation_signals[idx][:] = all_action[-1]
+            else:
+                all_observations = list_of_dict_to_dict_of_list(raw_all_observations)
+                with Timer("Eval"):
+                    with t.no_grad():
+                        all_output = framework.act(
+                            all_observations,
+                            call_dp_or_ddp_internal_module=True,
+                        )
+                all_action = [a.cpu().numpy().astype(np.float32) for a in all_output[0]]
+
+                for idx, id_ in enumerate(ids):
+                    actions[id_].append([all_output[0][idx], all_output[1][idx]])
+                    rotation_signals[idx][:] = np.clip(
+                        all_action[idx], -angle_max, angle_max
+                    )
+
+            if debug_log is not None:
+                for idx, id_ in enumerate(ids):
+                    debug_log["input"][id_]["rotation_signals"].append(
+                        np.array(rotation_signals[idx])
+                    )
+                    debug_log["input"][id_]["time_points"].append(time_points[idx])
+                with open(debug_log["file_name"], "wb") as file:
+                    pickle.dump(debug_log, file)
+
+            if callback_timer is not None:
+                callback_timer.pause()
+
+        return callback
+
+    @staticmethod
+    def replay(
+        devices: List[int],
+        debug_log_path: str,
+        save_record: bool = True,
+        record_buffer_size: int = 100,
+        return_observations: bool = False,
+        voxel_sample_num: int = 5000,
+        random_seed: int = 42,
+        override_env_config: str = None,
+        replay_configs: List[int] = None,
+    ):
+        with open(debug_log_path, "rb") as file:
+            debug_log = pickle.load(file)
+        if replay_configs is not None:
+            for real_id in replay_configs:
+                if len(debug_log["configs"]) <= real_id:
+                    raise ValueError("Invalid replay index")
+        else:
+            replay_configs = list(range(len(debug_log["configs"])))
+
+        current_index = {real_id: 0 for real_id in replay_configs}
+        observations = {real_id: [] for real_id in replay_configs}
+
+        def replay_callback(
+            ids: List[int],
+            time_points: List[float],
+            frames: List[RiseFrame],
+            expansion_signals: List[Any],
+            rotation_signals: List[Any],
+        ):
+            nonlocal current_index
+
+            if return_observations:
+                pool = ThreadPool(4)
+                for id_, observation, _ in pool.map(
+                    RiseStochasticEnv.process_observation,
+                    zip(
+                        ids,
+                        frames,
+                        [np.array(sig) for sig in rotation_signals],
+                        [voxel_sample_num] * len(ids),
+                        [random_seed + id_ for id_ in ids],
+                    ),
+                ):
+                    real_id = replay_configs[id_]
+                    observations[real_id].append(observation)
+
+            for idx, id_ in enumerate(ids):
+                real_id = replay_configs[id_]
+                if current_index[real_id] < len(
+                    debug_log["input"][real_id]["rotation_signals"]
+                ):
+                    rotation_signals[idx][:] = debug_log["input"][real_id][
+                        "rotation_signals"
+                    ][current_index[real_id]]
+                else:
+                    rotation_signals[idx][:] = debug_log["input"][real_id][
+                        "rotation_signals"
+                    ][-1]
+                current_index[real_id] += 1
+            print(current_index)
+
+        if override_env_config is not None:
+            for configs in debug_log["configs"]:
+                configs[0] = override_env_config
+
+        rise = Rise(devices=devices)
+        result = rise.run_sims(
+            [debug_log["configs"][id_] for id_ in replay_configs],
+            list(range(len(replay_configs))),
+            replay_callback,
+            record_buffer_size=record_buffer_size,
+            save_result=True,
+            save_record=save_record,
+            log_level="info",
+        )
+        if return_observations:
+            return result, observations
+        else:
+            return result
+
+    def run(
+        self,
+        generation: int,
+        save_record: bool = False,
+        record_buffer_size: int = 100,
+    ):
+        """
+        Args:
+            generation: A unique generation number
+            save_record: Whether to save the record for every simulation.
+            record_buffer_size: Record buffer size for every simulation, on GPU.
+        Returns:
+            A four element tuple,
+                first: List[bool], length N, indicating whether simulation is
+                    successful, unsuccessful experiments will not have a result file,
+                    the record file may exist and contains information up until the error
+                    in simulation occurs.
+                second: List[List[Dict[str, t.Tensor]]], shape [N, F*, ...], observations.
+                third: List[List[Tuple[t.Tensor, t.Tensor, t.Tensor]]], actions.
+                fourth: List[List[Dict[str, np.ndarray]]], shape [N, F*, ...], reward_states.
+        Note:
+            N: robot num (batch size)
+
+            F*: frame num, may differ between robots
+        """
+        configs = []
+        callback_timer = AccumulateTimer()
+        callback = self.get_callback(
+            self.framework,
+            self.observations,
+            self.actions,
+            self.reward_states,
+            self.angle_max,
             self.voxel_sample_num,
             self.random_seed + generation,
             self.debug_log,
@@ -611,14 +929,18 @@ class RiseSimpleStochasticEnv:
 
             if isinstance(framework, list):
                 all_action = []
-                with t.no_grad():
-                    with Timer("Eval"):
-                        for id_, observation in zip(ids, raw_all_observations):
+                with Timer("Eval"):
+                    with t.no_grad():
+                        for idx, (id_, observation) in enumerate(
+                            zip(ids, raw_all_observations)
+                        ):
                             output = framework[id_].act(
                                 list_of_dict_to_dict_of_list([observation]),
                                 call_dp_or_ddp_internal_module=True,
                             )
-                            all_action.append(angles[output[0].cpu().numpy()])
+                            all_action.append(angles[output[0][0].cpu().numpy()])
+                            actions[id_].append([output[0][0], output[1][0]])
+                            rotation_signals[idx][:] = all_action[-1]
             else:
                 all_observations = list_of_dict_to_dict_of_list(raw_all_observations)
                 with Timer("Eval"):
@@ -629,9 +951,9 @@ class RiseSimpleStochasticEnv:
                         )
                 all_action = [angles[a.cpu().numpy()] for a in all_output[0]]
 
-            for idx, id_ in enumerate(ids):
-                actions[id_].append([all_output[0][idx], all_output[1][idx]])
-                rotation_signals[idx][:] = all_action[idx]
+                for idx, id_ in enumerate(ids):
+                    actions[id_].append([all_output[0][idx], all_output[1][idx]])
+                    rotation_signals[idx][:] = all_action[idx]
 
             if debug_log is not None:
                 for idx, id_ in enumerate(ids):
@@ -722,7 +1044,7 @@ class RiseSimpleStochasticEnv:
             record_buffer_size=record_buffer_size,
             save_result=True,
             save_record=save_record,
-            log_level="debug",
+            log_level="info",
         )
         if return_observations:
             return result, observations
