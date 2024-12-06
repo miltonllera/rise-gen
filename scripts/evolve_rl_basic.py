@@ -600,8 +600,8 @@ if __name__ == "__main__":
     parser.add_argument("--ckpt_sub_path", default="ckpt")
     parser.add_argument("--results_sub_path", default="results")
     parser.add_argument("--records_sub_path", default="records")
-    parser.add_argument("--base_seed", defualt=42)
-    parser.add_argument("--epochs", default=100000)
+    parser.add_argument("--base_seed", default=42)
+    parser.add_argument("--epochs", default=100)
     parser.add_argument("--voxel_size", default=0.01)
     parser.add_argument("--max_torque", default=6)
     parser.add_argument("--min_actions", default=30)
@@ -619,7 +619,7 @@ if __name__ == "__main__":
     parser.add_argument("--plot_robots", default=True)
 
     parser.add_argument("--num_cpus", default=50)
-    parser.add_argument("num_collectors", default=2)
+    parser.add_argument("--num_collectors", default=2)
 
     args = parser.parse_args()
 
@@ -649,10 +649,10 @@ if __name__ == "__main__":
         + [f"{code_root_dir}/data/env.rsc"],
         env_vars=env_vars,
         generator_path=args.generator_path,
-        rl_dirs=args.dirs,
+        rl_dirs=dirs,
         base_seed=args.base_seed,
         epochs=args.epochs,
-        env_config=args.env_config,
+        env_config=env_config,
         voxel_size=args.voxel_size,
         max_torque=args.max_torque,
         min_actions=args.min_actions,
