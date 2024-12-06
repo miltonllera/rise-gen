@@ -1,5 +1,6 @@
 import os
 import time
+import argparse
 import pprint
 import pickle
 import cma
@@ -483,18 +484,18 @@ class RobotEvolution:
                 self.writer.add_scalar(
                     "step_actor_loss",
                     step_actor_loss,
-                    epoch * ppo_train_steps + ppo_step,
+                    epoch * self.ppo_train_steps + ppo_step,
                 )
                 self.writer.add_scalar(
                     "step_critic_loss",
                     step_critic_loss,
-                    epoch * ppo_train_steps + ppo_step,
+                    epoch * self.ppo_train_steps + ppo_step,
                 )
                 nn.utils.clip_grad_norm_(self.ppo.actor.parameters(), 4)
                 nn.utils.clip_grad_norm_(self.ppo.critic.parameters(), 4)
                 for optimizer in self.ppo.optimizers:
                     optimizer.step()
-            epoch_loss /= ppo_train_steps * self.ppo_accumulate_steps
+            epoch_loss /= self.ppo_train_steps * self.ppo_accumulate_steps
             self.writer.add_scalar("epoch_loss", epoch_loss, epoch)
             self.writer.add_scalar("max_episode_length", np.max(episode_lengths), epoch)
             self.writer.add_scalar(
@@ -589,45 +590,51 @@ class RobotEvolution:
 
 
 if __name__ == "__main__":
-    generator_path = "./data/ckpt/vae-v2-epoch=97-val_loss=0.205.ckpt"
-    env_config_path = "./data/env.rsc"
-    root_path = "./data/rl-result"
-    log_sub_path = "logs"
-    debug_log_sub_path = "debug-logs"
-    ckpt_sub_path = "ckpt"
-    results_sub_path = "results"
-    records_sub_path = "records"
+    parser = argparse.ArgumentParser()
 
-    base_seed = 42
-    epochs = 100000
-    voxel_size = 0.01
-    max_torque = 6
-    min_actions = 30
-    collector_num = 4
-    pop_size = 64
-    rollout_num = 2
-    rollout_epochs = 20
+    parser.add_argument("--generator_path", type=str, default="./data/ckpt/vae.ckpt")
+    parser.add_argument("--env_config_path", type=str, default="./data/env.rsc")
+    parser.add_argument("--root_path", default="./data/rl-result")
+    parser.add_argument("--log_sub_path", default="logs")
+    parser.add_argument("--debug_log_sub_path", default="debug-logs")
+    parser.add_argument("--ckpt_sub_path", default="ckpt")
+    parser.add_argument("--results_sub_path", default="results")
+    parser.add_argument("--records_sub_path", default="records")
+    parser.add_argument("--base_seed", defualt=42)
+    parser.add_argument("--epochs", default=100000)
+    parser.add_argument("--voxel_size", default=0.01)
+    parser.add_argument("--max_torque", default=6)
+    parser.add_argument("--min_actions", default=30)
+    parser.add_argument("--collector_num", default=4)
+    parser.add_argument("--pop_size", default=64)
+    parser.add_argument("--rollout_num", default=2)
+    parser.add_argument("--rollout_epochs", default=20)
 
-    actor_lr = 6e-5
-    critic_lr = 6e-5
-    ppo_batch_size = 16
-    ppo_train_steps = 60
-    ppo_accumulate_steps = 4
-    ppo_save_interval = 10
-    plot_robots = True
+    parser.add_argument("--actor_lr", default=6e-5)
+    parser.add_argument("--critic_lr", default=6e-5)
+    parser.add_argument("--ppo_batch_size", default=16)
+    parser.add_argument("--ppo_train_steps", default=60)
+    parser.add_argument("--ppo_accumulate_steps", default=4)
+    parser.add_argument("--ppo_save_interval", default=10)
+    parser.add_argument("--plot_robots", default=True)
 
-    ray.init(num_cpus=50)
+    parser.add_argument("--num_cpus", default=50)
+    parser.add_argument("num_collectors", default=2)
+
+    args = parser.parse_args()
+
+    ray.init(num_cpus=args.num_cpus)
     print("Ray initialized")
-    with open(env_config_path, "r") as f:
+    with open(args.env_config_path, "r") as f:
         env_config = f.read()
 
     dirs = RLTrainDirs(
-        root_path=root_path,
-        log_sub_path=log_sub_path,
-        debug_log_sub_path=debug_log_sub_path,
-        ckpt_sub_path=ckpt_sub_path,
-        results_sub_path=results_sub_path,
-        records_sub_path=records_sub_path,
+        root_path=args.root_path,
+        log_sub_path=args.log_sub_path,
+        debug_log_sub_path=args.debug_log_sub_path,
+        ckpt_sub_path=args.ckpt_sub_path,
+        results_sub_path=args.results_sub_path,
+        records_sub_path=args.records_sub_path,
     )
     env_vars = dict(os.environ)
 
@@ -641,25 +648,25 @@ if __name__ == "__main__":
         ]
         + [f"{code_root_dir}/data/env.rsc"],
         env_vars=env_vars,
-        generator_path=generator_path,
-        rl_dirs=dirs,
-        base_seed=base_seed,
-        epochs=epochs,
-        env_config=env_config,
-        voxel_size=voxel_size,
-        max_torque=max_torque,
-        min_actions=min_actions,
-        collector_num=collector_num,
-        pop_size=pop_size,
-        rollout_num=rollout_num,
-        rollout_epochs=rollout_epochs,
-        actor_lr=actor_lr,
-        critic_lr=critic_lr,
-        ppo_batch_size=ppo_batch_size,
-        ppo_train_steps=ppo_train_steps,
-        ppo_accumulate_steps=ppo_accumulate_steps,
-        ppo_save_interval=ppo_save_interval,
-        plot_robots=plot_robots,
+        generator_path=args.generator_path,
+        rl_dirs=args.dirs,
+        base_seed=args.base_seed,
+        epochs=args.epochs,
+        env_config=args.env_config,
+        voxel_size=args.voxel_size,
+        max_torque=args.max_torque,
+        min_actions=args.min_actions,
+        collector_num=args.collector_num,
+        pop_size=args.pop_size,
+        rollout_num=args.rollout_num,
+        rollout_epochs=args.rollout_epochs,
+        actor_lr=args.actor_lr,
+        critic_lr=args.critic_lr,
+        ppo_batch_size=args.ppo_batch_size,
+        ppo_train_steps=args.ppo_train_steps,
+        ppo_accumulate_steps=args.ppo_accumulate_steps,
+        ppo_save_interval=args.ppo_save_interval,
+        plot_robots=args.plot_robots,
     )
     ray.get(evo.evolve.remote())
     time.sleep(5)
