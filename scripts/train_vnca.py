@@ -3,7 +3,7 @@ import lightning.pytorch as pl
 from lightning.pytorch.loggers import TensorBoardLogger
 from lightning.pytorch.callbacks import ModelCheckpoint
 from torch.utils.data import DataLoader, random_split
-from model.vae.star_vae import StarVAE
+from model.vae.vnca import VNCA
 from synthetic.dataset import PlaceholderDataset
 
 
@@ -15,19 +15,20 @@ train_dataset, valid_dataset = random_split(robot_dataset, [train_size, valid_si
 train_loader = DataLoader(
     train_dataset,
     batch_size=8,
-    num_workers=0,
+    num_workers=7,
     shuffle=True,
 )
 
 valid_loader = DataLoader(
     valid_dataset,
     batch_size=8,
-    num_workers=0,
+    num_workers=7,
     shuffle=False,
 )
 
-vae = StarVAE(
+vae = VNCA(
     e_dim=512,
+    nca_hid=128,
     min_num_nodes=3,
     max_num_nodes=8,
     grid_size=64,
@@ -35,10 +36,11 @@ vae = StarVAE(
     vrn_depth=5,
     conv_layers=3,
 )
+
 vae.hparams.lr = 3e-5
 vae.beta = 1
 checkpoint_callback = ModelCheckpoint(
-    dirpath="data/ckpt/vae/",
+    dirpath="data/ckpt/vnca/",
     filename="v2-{epoch:02d}-{val_loss:.3f}",
     save_top_k=10,
     verbose=True,

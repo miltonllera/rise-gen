@@ -1241,6 +1241,15 @@ class StarRobot(BaseSample):
                 centroid = (bbox_min + bbox_max) / 2.0
                 shift_vector = t.floor(center - centroid)
                 shifted_grids[i] = grid - shift_vector
+
+            # TODO: Should be possible to run a batched version of the above like:
+            # non_empty = t.nonzero(self.is_not_empty[:, 0])
+            # bbox_min = non_empty.min(dim=1).values
+            # bbox_max = non_empty.max(dim=1).values
+            # centroid = (bbox_min + bbox_max) / 2.0
+            # shift_vector = t.floor(center[None] - centroid)
+            # shifted_grids = grid[None] - shift_vector
+
             shifted_grids = 2.0 * shifted_grids / (self.resolution - 1) - 1.0
             shifted_samples = F.grid_sample(
                 samples,
