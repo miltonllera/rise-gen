@@ -1,5 +1,6 @@
 import os
 import time
+import dotenv
 import argparse
 import pprint
 import pickle
@@ -626,6 +627,7 @@ if __name__ == "__main__":
     parser.add_argument("--num_collectors", default=2)
 
     args = parser.parse_args()
+    dotenv.load_dotenv()
 
     ray.init(num_cpus=args.num_cpus)
     print("Ray initialized")
