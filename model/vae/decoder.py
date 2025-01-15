@@ -1,7 +1,6 @@
 import torch.nn as nn
 import numpy as np
 from model.voxception import VoxceptionResnet
-from model.vae.nca import NCA
 
 
 class RobotConvDecoder(nn.Module):

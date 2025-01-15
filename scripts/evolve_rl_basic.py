@@ -20,6 +20,7 @@ from neptune_tensorboard import enable_tensorboard_logging
 
 from rl.algorithms import PPO
 from model.vae.star_vae import StarVAE
+from model.vae.vnca import VNCA
 from model.rl.robot import RobotEncoder, RobotActor, RobotCritic
 from utils.train_utils import RLTrainDirs, ExceptionCatcher, count_parameters
 from scripts.common import build_robot, RobotSimulationCollector
@@ -101,7 +102,10 @@ class RobotEvolution:
             t.manual_seed(base_seed)
             t.cuda.manual_seed(base_seed)
             np.random.seed(base_seed)
-            self.vae = StarVAE.load_from_checkpoint(
+            # self.vae = StarVAE.load_from_checkpoint(
+            #     generator_path, map_location="cuda:0"
+            # )
+            self.vae = VNCA.load_from_checkpoint(
                 generator_path, map_location="cuda:0"
             )
             self.vae.eval()
