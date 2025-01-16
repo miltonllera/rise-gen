@@ -4,10 +4,18 @@ from lightning.pytorch.loggers import TensorBoardLogger
 from lightning.pytorch.callbacks import ModelCheckpoint
 from torch.utils.data import DataLoader, random_split
 from model.vae.vnca import VNCA
-from synthetic.dataset import PlaceholderDataset
+from synthetic.dataset import StarRobotDataset
 
 
-robot_dataset = PlaceholderDataset(10000000)
+GRID_SIZE=64
+
+
+robot_dataset = StarRobotDataset(
+    dataset_size=10000000,
+    min_num_nodes=3,
+    max_num_nodes=8,
+    grid_size=GRID_SIZE,
+)
 
 train_size = int(0.9 * len(robot_dataset))
 valid_size = len(robot_dataset) - train_size
@@ -17,6 +25,7 @@ train_loader = DataLoader(
     batch_size=8,
     num_workers=7,
     shuffle=True,
+    pin_memory=True,
 )
 
 valid_loader = DataLoader(
@@ -24,14 +33,16 @@ valid_loader = DataLoader(
     batch_size=8,
     num_workers=7,
     shuffle=False,
+    pin_memory=True,
+    persistent_workers=True,
 )
 
 vae = VNCA(
     e_dim=512,
     nca_hid=128,
-    min_num_nodes=3,
-    max_num_nodes=8,
-    grid_size=64,
+    min_num_nodes=3,  # TODO: This is not needed
+    max_num_nodes=8,  # TODO: This is not needed
+    grid_size=GRID_SIZE,
     vrn_dim=32,
     vrn_depth=5,
     conv_layers=3,
@@ -61,4 +72,7 @@ trainer = pl.Trainer(
     max_epochs=-1,
 )
 t.set_float32_matmul_precision("high")
-trainer.fit(vae, train_loader, valid_loader)
+
+
+if __name__ == "__main__":
+    trainer.fit(vae, train_loader, valid_loader)

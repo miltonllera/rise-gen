@@ -102,8 +102,7 @@ class VNCA(pl.LightningModule):
         x_ = self.decoder(z)
         return x_, z, (mu, logvar)
 
-    def training_step(self, batch, batch_idx):
-        x = self.get_samples(len(batch))
+    def training_step(self, x, batch_idx):
         x_, _, (mu, logvar) = self.forward(x)
 
         kld_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp(), dim=1).mean()
@@ -128,8 +127,7 @@ class VNCA(pl.LightningModule):
         )
         return loss
 
-    def validation_step(self, batch, batch_idx):
-        x = self.get_samples(len(batch))
+    def validation_step(self, x, batch_idx):
         x_, _, (mu, logvar) = self.forward(x)
 
         kld = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
