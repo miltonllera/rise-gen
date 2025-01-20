@@ -27,10 +27,10 @@ valid_loader = DataLoader(
 )
 
 vae = StarVAE(
-    e_dim=512,
+    e_dim=256,
     min_num_nodes=3,
     max_num_nodes=8,
-    grid_size=64,
+    grid_size=32,
     vrn_dim=32,
     vrn_depth=5,
     conv_layers=3,

@@ -40,7 +40,7 @@ valid_loader = DataLoader(
 )
 
 vae = VNCA(
-    z_dim=512,
+    z_dim=256,
     nca_hid=128,
     max_num_nodes=8,
     grid_size=GRID_SIZE,
