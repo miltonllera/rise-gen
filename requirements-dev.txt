@@ -9,7 +9,7 @@ tqdm
 scipy
 scikit-image
 scikit-learn
-torch==2.3.0
+torch
 torchviz
 lightning==2.4.0
 tensorboard
@@ -39,3 +39,4 @@ torch_scatter
 torch_sparse
 torch_cluster
 torch_spline_conv
+pyrootutils

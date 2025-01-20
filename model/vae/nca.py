@@ -10,6 +10,7 @@ class NCA(nn.Module):
         min_steps: int,
         max_steps: int | None = None,
         p_update: float = 1.0,
+        condition_fn: Callable | None = None,
         alive_mask: Callable | None = None,
         norm_update: Callable | None = None,
     ) -> None:
@@ -33,10 +34,11 @@ class NCA(nn.Module):
         self.min_steps = min_steps
         self.max_steps = max_steps
         self.p_update = p_update
+        self.condition_fn = condition_fn
         self.alive_mask = alive_mask
         self.norm_update = norm_update
 
-    def forward(self, inputs, n_steps=None, return_trajectory=False):
+    def forward(self, inputs, condition=None, n_steps=None, return_trajectory=False):
         B = inputs.shape[0]
 
         if n_steps is None:
@@ -50,6 +52,9 @@ class NCA(nn.Module):
 
         while torch.any(not_done) and i < n_steps:
             pre_alive_mask = self.is_alive(state)
+
+            if condition is not None and self.condition_fn is not None:
+                state = self.condition_fn(state, condition) * pre_alive_mask
 
             update = self.update_net(state)
             update_mask = self.update_mask(state) & not_done
@@ -91,19 +96,33 @@ class NCADecoder(nn.Module):
         self,
         latent_size: int,
         output_size: int,
-        nca: NCA,
-        init_resolution: int,
         n_dims: int,
         n_doubling_steps: int,
+        nca: NCA,
+        init_resolution: int = 2,
+        init_fn: Callable | None = None,
+        use_position_embeddings: bool = False,
+        condition_nca: bool = False,
     ) -> None:
         super().__init__()
 
-        self.init_resolution = init_resolution
+        position_embeddings = torch.zeros([latent_size] + [init_resolution] * n_dims)
+        if use_position_embeddings:
+            position_embeddings = torch.nn.init.normal_(position_embeddings, std=0.1)
+            position_embeddings = nn.Parameter(position_embeddings)
+
+        if init_fn is None:
+            init_fn = lambda x, pe: x + pe
+
         self.n_dims = n_dims
         self.n_doubling_steps = n_doubling_steps
+        self.init_resolution = init_resolution
+        self.position_embeddings = position_embeddings
+        self.init_fn = init_fn
         self.nca = nca
         self.upsample = nn.Upsample(scale_factor=2, mode='nearest')
         self.output_fun = nn.Linear(latent_size, output_size, bias=False)
+        self.condition_nca = condition_nca
 
     def forward(self, z):
         # broadcast z to all initial grid cells
@@ -112,8 +131,11 @@ class NCADecoder(nn.Module):
             ([self.init_resolution] * self.n_dims)
         )
 
+        state = self.init_fn(state, self.position_embeddings)
+        condition = z if self.condition_nca else None
+
         for m in range(self.n_doubling_steps):
-            state, _ = self.nca(state, n_steps=2*m+2)
+            state, _ = self.nca(state, condition=condition, n_steps=2*m+2)
             state = self.upsample(state)
 
         return self.output_fun(state.movedim(1, -1)).movedim(-1, 1)

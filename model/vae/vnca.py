@@ -1,4 +1,5 @@
 import math
+from typing import Callable, Literal
 import numpy as np
 import torch
 import torch.nn as nn
@@ -12,77 +13,67 @@ from .nn import Residual, DiagonalGaussian
 class VNCA(pl.LightningModule):
     def __init__(
         self,
-        e_dim: int,
-        min_num_nodes: int,
-        max_num_nodes: int,
+        z_dim: int,
         grid_size: int,
+        max_num_nodes: int,
         vrn_dim: int,
         vrn_depth: int,
         conv_layers: int,
-        nca_hid: int,
+        state_dim: int | None = None,
+        nca_hid: int | None = None,
+        nca_layers: int = 4,
         init_resolution: int=2,
+        position_dependent_cell_init: bool = False,
+        condition_nca: bool = False,
         beta: float = 0.1,
         lr: float = 3e-5,
         step_size: int = 4,
         gamma: float = 0.91,
     ):
         super().__init__()
+
+        n_doubling_steps = int(math.log2(grid_size / init_resolution))
+        assert math.pow(2, n_doubling_steps) * init_resolution == grid_size
+
+        if state_dim is None:
+            state_dim = z_dim
+
+        if nca_hid is None:
+            nca_hid = 4 * state_dim
+
         self.save_hyperparameters()  # saves parameters automatically using reflection
         self.beta = beta
 
         # NOTE: For now use the same encoder as the original model
         self.encoder = RobotConvEncoder(
             f_dim=max_num_nodes + 2,
-            e_dim=e_dim,
+            e_dim=z_dim,
             grid_size=grid_size,
             vrn_dim=vrn_dim,
             vrn_depth=vrn_depth,
             n_conv_encoder_layers=conv_layers,
         )
-
-        self.latent = DiagonalGaussian(e_dim, e_dim)
-
-        upsample_ratio = grid_size / init_resolution
-        n_doubling_steps = int(math.log2(upsample_ratio))
-
-        assert math.pow(2, n_doubling_steps) * init_resolution == grid_size
-
-        nca = NCA(
-            update_net = nn.Sequential(
-                nn.Conv3d(e_dim, nca_hid, 3, padding=1),
-                Residual(
-                    nn.Conv3d(nca_hid, nca_hid, 1),
-                    nn.ELU(),
-                    nn.Conv3d(nca_hid, nca_hid, 1),
-                ),
-                Residual(
-                    nn.Conv3d(nca_hid, nca_hid, 1),
-                    nn.ELU(),
-                    nn.Conv3d(nca_hid, nca_hid, 1),
-                ),
-                Residual(
-                    nn.Conv3d(nca_hid, nca_hid, 1),
-                    nn.ELU(),
-                    nn.Conv3d(nca_hid, nca_hid, 1),
-                ),
-                Residual(
-                    nn.Conv3d(nca_hid, nca_hid, 1),
-                    nn.ELU(),
-                    nn.Conv3d(nca_hid, nca_hid, 1),
-                ),
-                nn.Conv3d(nca_hid, e_dim, 1)
-            ),
-            min_steps=0,
-            max_steps=20,
-        )
-
+        self.latent = DiagonalGaussian(z_dim, z_dim)
         self.decoder = NCADecoder(
-            latent_size=e_dim,
+            latent_size=state_dim,
             output_size=max_num_nodes + 2,
-            nca=nca,
+            nca=NCA(
+                update_net=create_conv_update_network(
+                    state_dim,
+                    nca_hid,
+                    n_layers=nca_layers,
+                    n_dim=3,
+                    act_fn=nn.ELU,
+                    residual=True
+                ),
+                min_steps=0,
+                max_steps=20,
+            ),
             init_resolution=init_resolution,
             n_dims=3,
             n_doubling_steps=n_doubling_steps,
+            use_position_embeddings=position_dependent_cell_init,
+            condition_nca=condition_nca,
         )
 
     def get_samples(self, n, seed: int | None = None):
@@ -180,11 +171,11 @@ class VNCA(pl.LightningModule):
 
     def generate(self, batch_size, seed=None, mean=None, var=None):
         if seed is None:
-            latent = torch.randn([batch_size, self.hparams.e_dim], device=self.device)
+            latent = torch.randn([batch_size, self.hparams.z_dim], device=self.device)
         else:
             generator = torch.Generator(self.device).manual_seed(seed)
             latent = torch.randn(
-                [batch_size, self.hparams.e_dim],
+                [batch_size, self.hparams.z_dim],
                 generator=generator,
                 device=self.device,
             )
@@ -197,3 +188,35 @@ class VNCA(pl.LightningModule):
         seg_num = torch.sum(target_segmentation, dim=(0, 2, 3, 4))
         weight = torch.where(seg_num > 0, 1 / seg_num, 0)
         return weight / weight.sum()
+
+
+def create_conv_update_network(
+    input_dim: int,
+    hidden_dim: int,
+    n_layers: int,
+    n_dim: Literal[2] | Literal[3] = 3,
+    act_fn: Callable | nn.Module = nn.ELU,
+    residual: bool = True,
+):
+
+    if n_dim == 2:
+        conv = nn.Conv2d
+    else:
+        conv = nn.Conv3d
+
+    layers: list[nn.Module] = [conv(input_dim, hidden_dim, kernel_size=3, padding=1)]
+    for _ in range(n_layers):
+        layer_block = [
+            conv(hidden_dim, hidden_dim, kernel_size=1),
+            act_fn(),
+            conv(hidden_dim, hidden_dim, kernel_size=1),
+        ]
+
+        if residual:
+            layers.append(Residual(*layer_block))
+        else:
+            layers.extend(layer_block)
+
+    layers.append(conv(hidden_dim, input_dim, kernel_size=1))
+
+    return nn.Sequential(*layers)

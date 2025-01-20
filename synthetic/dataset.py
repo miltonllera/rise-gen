@@ -22,12 +22,14 @@ class StarRobotDataset(Dataset):
     def __init__(
         self,
         dataset_size: int,
+        batch_size: int,
         min_num_nodes: int,
         max_num_nodes: int,
         grid_size: int,
         seed: int | None = None
     ) -> None:
         self.dataset_size = dataset_size
+        self.batch_size = batch_size
         self.min_num_nodes = min_num_nodes
         self.max_num_nodes = max_num_nodes
         self.grid_size = grid_size
@@ -40,7 +42,7 @@ class StarRobotDataset(Dataset):
         return StarRobot(
             self.min_num_nodes,
             self.max_num_nodes,
-            batch_size=1,
+            batch_size=self.batch_size,
             device='cpu',  # type: ignore
             seed=self.rng.integers(0, 2**32-1),  # type: ignore
             resolution=self.grid_size,
