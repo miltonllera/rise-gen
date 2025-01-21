@@ -21,7 +21,7 @@ class VNCA(pl.LightningModule):
         conv_layers: int,
         state_dim: int | None = None,
         nca_hid: int | None = None,
-        nca_layers: int = 4,
+        n_update_net_layers: int = 4,
         init_resolution: int=2,
         position_dependent_cell_init: bool = False,
         condition_nca: bool = False,
@@ -61,7 +61,7 @@ class VNCA(pl.LightningModule):
                 update_net=create_conv_update_network(
                     state_dim,
                     nca_hid,
-                    n_layers=nca_layers,
+                    n_layers=n_update_net_layers,
                     n_dim=3,
                     act_fn=nn.ELU,
                     residual=True
