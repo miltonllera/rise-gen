@@ -118,6 +118,7 @@ def main(
 
     trainer.fit(vnca, train_loader, valid_loader)
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("Training Variational NCAs")
 
