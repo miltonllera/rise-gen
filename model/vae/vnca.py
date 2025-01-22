@@ -6,8 +6,9 @@ import torch.nn as nn
 import lightning.pytorch as pl
 from synthetic.sample import StarRobot
 from .encoder import RobotConvEncoder
-from .nca import NCA, NCADecoder
-from .nn import Residual, DiagonalGaussian
+from .ca import CellularAutomata
+from .nca import VoxelUpdate, VoxelPerception, VoxelNCADecoder
+from .nn import DiagonalGaussian
 
 
 class VNCA(pl.LightningModule):
@@ -21,7 +22,7 @@ class VNCA(pl.LightningModule):
         conv_layers: int,
         state_dim: int | None = None,
         nca_hid: int | None = None,
-        n_update_net_layers: int = 4,
+        n_res_blocks: int = 4,
         init_resolution: int=2,
         position_dependent_cell_init: bool = False,
         condition_nca: bool = False,
@@ -54,18 +55,12 @@ class VNCA(pl.LightningModule):
             n_conv_encoder_layers=conv_layers,
         )
         self.latent = DiagonalGaussian(z_dim, z_dim)
-        self.decoder = NCADecoder(
+        self.decoder = VoxelNCADecoder(
             latent_size=state_dim,
             output_size=max_num_nodes + 2,
-            nca=NCA(
-                update_net=create_conv_update_network(
-                    state_dim,
-                    nca_hid,
-                    n_layers=n_update_net_layers,
-                    n_dim=3,
-                    act_fn=nn.ELU,
-                    residual=True
-                ),
+            nca=CellularAutomata(
+                perception_fn=VoxelPerception(state_dim),
+                update_fn=VoxelUpdate(state_dim, nca_hid, n_res_blocks, nn.ELU),
                 min_steps=0,
                 max_steps=20,
             ),
@@ -190,33 +185,3 @@ class VNCA(pl.LightningModule):
         return weight / weight.sum()
 
 
-def create_conv_update_network(
-    input_dim: int,
-    hidden_dim: int,
-    n_layers: int,
-    n_dim: Literal[2] | Literal[3] = 3,
-    act_fn: Callable | nn.Module = nn.ELU,
-    residual: bool = True,
-):
-
-    if n_dim == 2:
-        conv = nn.Conv2d
-    else:
-        conv = nn.Conv3d
-
-    layers: list[nn.Module] = [conv(input_dim, hidden_dim, kernel_size=3, padding=1)]
-    for _ in range(n_layers):
-        layer_block = [
-            conv(hidden_dim, hidden_dim, kernel_size=1),
-            act_fn(),
-            conv(hidden_dim, hidden_dim, kernel_size=1),
-        ]
-
-        if residual:
-            layers.append(Residual(*layer_block))
-        else:
-            layers.extend(layer_block)
-
-    layers.append(conv(hidden_dim, input_dim, kernel_size=1))
-
-    return nn.Sequential(*layers)
