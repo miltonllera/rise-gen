@@ -31,7 +31,7 @@ def create_dataset(min_nodes, max_nodes, grid_size, batch_size):
 
     valid_loader = DataLoader(
         valid_dataset,
-        batch_size=8,
+        batch_size=None,
         num_workers=7,
         shuffle=False,
         pin_memory=True,
@@ -45,26 +45,17 @@ def create_model(
     max_nodes,
     grid_size,
     z_dim,
-    state_dim,
-    update_net_layers,
-    position_dependent_cell_init,
-    condition_nca,
+    update_net_width,
 ):
     vnca = VNCA(
-        z_dim=z_dim,
-        state_dim=state_dim,
+        e_dim=z_dim,
+        nca_hid=update_net_width,
         max_num_nodes=max_nodes,
         grid_size=grid_size,
         vrn_dim=32,
         vrn_depth=5,
         conv_layers=3,
-        n_update_net_layers=update_net_layers,
-        position_dependent_cell_init=position_dependent_cell_init,
-        condition_nca=condition_nca,
     )
-
-    vnca.hparams.lr = 3e-5
-    vnca.beta = 1
 
     return vnca
 
@@ -72,10 +63,8 @@ def create_model(
 def main(
     grid_size: int,
     latent_size: int,
-    update_net_layers: int,
-    position_dependent_cell_init: bool,
-    condition_nca: bool,
-    state_dim: int | None = None,
+    update_net_width: int,
+    update_net_depth: int,
     batch_size: int = 8,
     min_nodes: int = 3,
     max_nodes: int = 8,
@@ -87,10 +76,7 @@ def main(
         max_nodes,
         grid_size,
         latent_size,
-        state_dim,
-        update_net_layers,
-        position_dependent_cell_init,
-        condition_nca,
+        update_net_width,
     )
 
     checkpoint_callback = ModelCheckpoint(
@@ -126,17 +112,10 @@ if __name__ == "__main__":
         help="Maximum morphology size along each dimension")
     parser.add_argument("--latent_size", type=int, default=512,
         help="Size of the latent space used in the VNCA.")
-    parser.add_argument("--state_dim", type=int, default=32,
+    parser.add_argument("--update_net_width", type=int, default=128,
         help="State size of the NCA cells")
     parser.add_argument("--update_net_depth", type=int, default=4,
         help="Depth of the feed-forward network used to update the NCA cell states.")
-    parser.add_argument("--positional_init", action='store_true', type=bool,
-        help="Whether to use positional information to condition the initial state init.")
-    parser.add_argument("--condition_nca", action='store_true', type=bool,
-        help="Conditon the NCA' update net on the latent vector at each time step.")
-    parser.add_argument("--nca_hid", type=int, default=128,
-        help="Size of the hidden state used in the NCA decoder update function")
-
 
     args = parser.parse_args()
 
